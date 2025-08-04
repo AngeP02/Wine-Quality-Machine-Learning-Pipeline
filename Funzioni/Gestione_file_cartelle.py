@@ -1,20 +1,27 @@
-# logic/file_manager.py
-
 import os
 import pandas as pd
-from config import RAW_DATA_DIR
+import streamlit as st
 
-def save_uploaded_file(uploaded_file):
-    os.makedirs(RAW_DATA_DIR, exist_ok=True)
-    file_path = os.path.join(RAW_DATA_DIR, uploaded_file.name)
-    with open(file_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    return file_path
+def salva_file_locale(file, dest_dir):
+    path = os.path.join(dest_dir, file.name)
+    with open(path, "wb") as f:
+        f.write(file.getbuffer())
+    st.success("Header validato. Avvio preprocessing")
 
-def load_csv_files():
-    files = [f for f in os.listdir(RAW_DATA_DIR) if f.endswith(".csv")]
-    datasets = []
-    for file in files:
-        df = pd.read_csv(os.path.join(RAW_DATA_DIR, file), sep=';')
-        datasets.append((file, df))
-    return datasets
+def verifica_header_direttamente(uploaded_files):
+    header = None
+    tipo_vini = {}
+    dfs = {}
+
+    for file in uploaded_files:
+        df = pd.read_csv(file, sep=";")
+        if header is None:
+            header = list(df.columns)
+        elif list(df.columns) != header:
+            return False, None, None  # Header diverso
+
+        tipo = "rosso" if "red" in file.name.lower() else "bianco"
+        tipo_vini[file.name] = tipo
+        dfs[file.name] = df
+
+    return True, tipo_vini, dfs

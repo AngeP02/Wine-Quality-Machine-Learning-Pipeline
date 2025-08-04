@@ -1,43 +1,43 @@
 import streamlit as st
-from Funzioni import Preprocessing, Gestione_file_cartelle, Modello, Metriche, Inferenza
+from Funzioni import Gestione_file_cartelle, Preprocessing, Metriche, Inferenza,Modello
 import os
 
-st.set_page_config(page_title="ML Pipeline Locale", layout="wide")
-st.subheader("Wine Quality Machine Learning Pipeline")
+st.set_page_config(page_title="Wine Quality Pipeline", layout="wide")
+st.subheader("Wine Quality - Machine Learning Pipeline")
 
-uploaded_files = st.file_uploader("Caricare uno o più dataset", type="csv", accept_multiple_files=True)
+RAW_DIR = "./SimulatedCloud/raw_data"
+PROCESSED_DIR = "./SimulatedCloud/processed_data"
+MODELS_DIR = "./SimulatedCloud/models"
+LOGS_DIR = "./SimulatedCloud/logs"
+
+for d in [RAW_DIR, PROCESSED_DIR, MODELS_DIR, LOGS_DIR]: os.makedirs(d, exist_ok=True)
+
+uploaded_files = st.file_uploader("Caricare uno o più file CSV del dataset Wine Quality:", type="csv", accept_multiple_files=True)
 
 if uploaded_files:
-    for file in uploaded_files:
-        path = Gestione_file_cartelle.save_uploaded_file(file)
-    st.success("File caricati")
-    datasets = Gestione_file_cartelle.load_csv_files()
-    combined = []
-    for fname, df in datasets:
-        label = "red" if "red" in fname else "white"
-        df_processed = Preprocessing.preprocess(df, label)
-        Preprocessing.save_processed(df_processed, f"processed_{fname}")
-        combined.append(df_processed)
-    st.success("Preprocessing completato")
-    all_data = []
-    for f in os.listdir("Dati/Preprocessati"):
-        all_data.append(Preprocessing.pd.read_csv(f"Dati/Preprocessati/{f}"))
-    full_df = Preprocessing.pd.concat(all_data)
-    model, X_test, y_test = Modello.train_model(full_df)
-    Modello.save_model(model)
-    st.success("Modello addestrato")
+    st.markdown("Log")
+    header_ok, tipo_vini, dfs = Gestione_file_cartelle.verifica_header_direttamente(uploaded_files)
+    if header_ok:
+        for file in uploaded_files:
+            Gestione_file_cartelle.salva_file_locale(file, RAW_DIR)
+        df_pulito = Preprocessing.preprocessa_dfs(dfs, tipo_vini, PROCESSED_DIR)
+        st.info("Avvio training automatico")
+        model, score, report = Modello.avvia_training(PROCESSED_DIR, MODELS_DIR)
+        st.text(report)
+        Metriche.mostra_metriche(report)
+        st.markdown("Inferenza")
+        header = Inferenza.get_header_from_processed(PROCESSED_DIR)
+        if header:
+            user_input = {}
+            cols = st.columns(len(header))
+            for i, col_name in enumerate(header):
+                user_input[col_name] = cols[i].number_input(f"{col_name}", format="%.2f")
+            if st.button("Predici qualità vino"):
+                predizione = Inferenza.predici(user_input, MODELS_DIR)
+                st.success(f"Predizione qualità del vino: {predizione}")
+        else:
+            st.warning(
+                "Impossibile recuperare header. Assicurarsi che il preprocessing sia stato eseguito correttamente.")
+    else:
+        st.error("I file hanno header differenti. Procedere separatamente.")
 
-    st.header("4. Valutazione")
-    metrics_df = Metriche.evaluate_model(model, X_test, y_test)
-    st.dataframe(metrics_df)
-
-st.header("5. Invia nuovi dati per inferenza")
-model = Inferenza.load_model()
-if model:
-    col_names = model.feature_names_in_
-    inputs = {}
-    for col in col_names:
-        inputs[col] = st.number_input(f"{col}", value=0.0)
-    if st.button("Predici qualità"):
-        pred = Inferenza.make_prediction(model, inputs)
-        st.success(f"Predizione: Qualità = {pred}")

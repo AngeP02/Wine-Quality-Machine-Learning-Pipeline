@@ -1,28 +1,35 @@
-# logic/preprocessing.py
-
 import pandas as pd
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from config import PROCESSED_DATA_DIR
+from sklearn.preprocessing import StandardScaler
 import os
+import streamlit as st
+import pickle
 
-def preprocess(df, file_label=""):
-    df = df.dropna()
-    if 'type' not in df.columns:
-        df["type"] = file_label
-    if 'type' in df.columns:
-        encoder = LabelEncoder()
-        df['type'] = encoder.fit_transform(df['type'])  # red → 0, white → 1
-    features = df.drop(columns=["quality"])
-    target = df["quality"]
+def preprocessa_dfs(dfs_dict, tipo_vini, processed_dir):
+    df_totale = pd.DataFrame()
+    for fname, df in dfs_dict.items():
+        df["wine_type"] = tipo_vini[fname]
+        df_totale = pd.concat([df_totale, df], ignore_index=True)
+
+    df_totale.dropna(inplace=True)
+
+    features = df_totale.drop(columns=["quality", "wine_type"])
     scaler = StandardScaler()
-    features_scaled = scaler.fit_transform(features)
-    df_scaled = pd.DataFrame(features_scaled, columns=features.columns)
-    df_scaled["quality"] = target.values
-    df_scaled["type"] = df["type"]
+    scaled_features = scaler.fit_transform(features)
+    df_scaled = pd.DataFrame(scaled_features, columns=features.columns)
+    df_scaled["quality"] = df_totale["quality"].values
+    df_scaled["wine_type"] = df_totale["wine_type"].values
+
+    output_path = os.path.join(processed_dir, "wine_processed.csv")
+    df_scaled.to_csv(output_path, index=False)
+    st.success(f"Preprocessing completato. Dati salvati in {output_path}.")
     return df_scaled
 
-def save_processed(df, filename):
-    os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
-    out_path = os.path.join(PROCESSED_DATA_DIR, filename)
-    df.to_csv(out_path, index=False)
-    return out_path
+def preprocessa_dati(df):
+    # Rimuove valori nulli
+    df = df.dropna()
+
+    # Encoding variabile "tipo" se presente
+    if "tipo" in df.columns:
+        df["tipo"] = df["tipo"].map({"red": 0, "white": 1})
+
+    return df
