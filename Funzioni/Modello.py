@@ -1,65 +1,87 @@
-import streamlit as st
-import os
-import pandas as pd
-import pickle
-from sklearn.ensemble import RandomForestClassifier
+from matplotlib import pyplot as plt
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
+import streamlit as st
 
-def avvia_training(processed_dir, models_dir):
-    data = pd.read_csv(os.path.join(processed_dir, "wine_processed.csv"))
-    X = data.drop(columns=["quality", "wine_type"])
-    y = data["quality"]
+def mostra_confusion_matrix(y_test, y_pred):
+    # Creazione matrice di confusione
+    cm = confusion_matrix(y_test, y_pred)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=sorted(y_test.unique()))
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
+    # Creazione della figura matplotlib
+    fig, ax = plt.subplots(figsize=(8, 6))
+    disp.plot(ax=ax)
 
-    y_pred = model.predict(X_test)
-    score = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred)
+    # Visualizzazione in Streamlit
+    st.pyplot(fig)
 
-    with open(os.path.join(models_dir, "wine_model.pkl"), "wb") as f:
-        pickle.dump(model, f)
-
-    st.success(f"Modello addestrato con accuracy: {score:.2f}")
-    return model, score, report
-
-STORAGE_DIR = "./simulated_cloud_storage"
-MODEL_DIR = os.path.join(STORAGE_DIR, "models")
-PROCESSED_DIR = os.path.join(STORAGE_DIR, "processed_data")
-
-os.makedirs(MODEL_DIR, exist_ok=True)
-
-def train_model():
-    # Carica dati già preprocessati
-    for file in os.listdir(PROCESSED_DIR):
-        if file.endswith(".csv"):
-            df = pd.read_csv(os.path.join(PROCESSED_DIR, file))
-            break  # Usa il primo disponibile
-
+def addestra_modello(df):
+    # Separazione tra feature e target
     X = df.drop("quality", axis=1)
     y = df["quality"]
 
-    # Train/test split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+    # Suddivisione in train/test
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+    class_weights = {
+        3: 15.0,  # Aumenta molto il peso delle classi ignorate
+        4: 10.0,
+        5: 1.0,
+        6: 1.0,
+        7: 2.0,
+        8: 5.0,
+    }
 
-    # Addestramento Random Forest
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
+    clf = RandomForestClassifier(n_estimators=100, random_state=42, class_weight=class_weights)
+
+    # Inizializzazione modello Random Forest
+    #clf = RandomForestClassifier(n_estimators=100, random_state=42, class_weight="balanced"  # utile se il dataset è sbilanciato )
+
+    # Addestramento
+    clf.fit(X_train, y_train)
 
     # Valutazione
-    y_pred = model.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=False)
+    y_pred = clf.predict(X_test)
+    mostra_confusion_matrix(y_test, y_pred)
+    return clf, X_test, y_test
 
-    # Salva modello
-    with open(os.path.join(MODEL_DIR, "model.pkl"), "wb") as f:
-        pickle.dump(model, f)
+from sklearn.model_selection import GridSearchCV
 
-    # Salva metriche per visualizzazione successiva
-    with open(os.path.join(MODEL_DIR, "report.txt"), "w") as f:
-        f.write(f"Accuracy: {acc:.4f}\n")
-        f.write(report)
 
-    return acc, report, y_test, y_pred
+def addestra_modello_2(df):
+    X = df.drop("quality", axis=1)
+    y = df["quality"]
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+
+    # Definizione del modello
+    clf = RandomForestClassifier(random_state=42, class_weight="balanced")
+
+    # Definizione della griglia di iperparametri da testare
+    param_grid = {
+        'n_estimators': [50, 100, 200],  # Numero di alberi nella foresta
+        'max_depth': [5, 10, 20, None],  # Profondità massima dell'albero
+        'min_samples_split': [2, 5, 10],  # Numero minimo di campioni richiesti per dividere un nodo
+        'min_samples_leaf': [1, 2, 4]  # Numero minimo di campioni richiesti in una foglia
+    }
+
+    # Inizializzazione di GridSearchCV
+    grid_search = GridSearchCV(
+        estimator=clf,
+        param_grid=param_grid,
+        cv=5,  # Usa la validazione incrociata a 5 fold
+        scoring='f1_weighted',  # La metrica da ottimizzare
+        n_jobs=-1
+    )
+
+    # Addestramento con la ricerca degli iperparametri
+    grid_search.fit(X_train, y_train)
+
+    # Valutazione con il modello migliore
+    best_clf = grid_search.best_estimator_
+    y_pred = best_clf.predict(X_test)
+
+    return best_clf, X_test, y_test
