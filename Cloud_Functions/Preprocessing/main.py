@@ -1,34 +1,46 @@
-import pandas as pd
-import os
+# main.py (Cloud Function preprocessing)
+import os, io, json, logging, datetime
 from google.cloud import storage
-import io
-import logging
+import pandas as pd
 
-OUTPUT_BUCKET = "wine-dataset-preprocessati"
+OUTPUT_BUCKET = os.getenv("OUTPUT_BUCKET", "wine-dataset-preprocessati")
+STATUS_BUCKET = os.getenv("STATUS_BUCKET", "wine-dataset-status")
+STATUS_FILE   = os.getenv("STATUS_FILE",   "status_preprocessing.json")
 
+def _scrivi_stato(storage_client, stato, extra=None):
+    bucket = storage_client.bucket(STATUS_BUCKET)
+    blob = bucket.blob(STATUS_FILE)
+    contenuto = {
+        "stato": stato,
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z"
+    }
+    if extra:
+        contenuto.update(extra)
+    blob.upload_from_string(json.dumps(contenuto), content_type="application/json")
 
 def preprocessing(event, context):
+    storage_client = storage.Client()
+    file_name = event['name']
+    bucket_name = event['bucket']
     try:
-        logging.info("Preprocessing started")
-        file_name = event['name']
-        bucket_name = event['bucket']
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(bucket_name)
-        blob = bucket.blob(file_name)
-        data = blob.download_as_bytes()
-        df = pd.read_csv(io.BytesIO(data), sep=';')
-        df = df.fillna(df.mean(numeric_only=True))
-        numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
-        df[numeric_cols] = (df[numeric_cols] - df[numeric_cols].mean()) / df[numeric_cols].std()
-        output_bucket_name = "wine-dataset-preprocessati"
-        output_bucket = storage_client.bucket(output_bucket_name)
-        processed_file_name = f"{os.path.basename(file_name)}"
-        output_blob = output_bucket.blob(processed_file_name)
-        buffer = io.BytesIO()
-        df.to_csv(buffer, index=False)
-        buffer.seek(0)
-        output_blob.upload_from_file(buffer, content_type='text/csv')
-        logging.info("Preprocessing completed successfully. File caricato su bucket")
+        _scrivi_stato(storage_client, "avviato", {"file_sorgente": file_name})
+        src_blob = storage_client.bucket(bucket_name).blob(file_name)
+        df = pd.read_csv(io.BytesIO(src_blob.download_as_bytes()), sep=',')
+        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+        feature_cols = [c for c in numeric_cols if c != "quality"]
+        df[feature_cols] = df[feature_cols].fillna(df[feature_cols].mean(numeric_only=True))
+        df[feature_cols] = (df[feature_cols] - df[feature_cols].mean()) / df[feature_cols].std(ddof=0)
+        processed_file_name = file_name.rsplit(".", 1)[0] + "_processesato.csv"
+        out_blob = storage_client.bucket(OUTPUT_BUCKET).blob(processed_file_name)
+        buff = io.BytesIO()
+        df.to_csv(buff, index=False)
+        buff.seek(0)
+        out_blob.upload_from_file(buff, content_type='text/csv')
+        _scrivi_stato(storage_client, "Pre processing completato", {
+            "file_sorgente": file_name,
+            "file_processato": processed_file_name
+        })
     except Exception as e:
-        logging.error(f"Errore durante il preprocessing: {e}")
+        logging.exception("Errore durante il preprocessing")
+        _scrivi_stato(storage_client, "Errore nel pre processing", {"message": str(e), "file_sorgente": file_name})
         raise

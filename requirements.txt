@@ -14,3 +14,5 @@ functions-framework==3.*
 
 joblib
 google-cloud-logging
+google-cloud-firestore
+streamlit_autorefresh
