@@ -1,9 +1,9 @@
 streamlit~=1.47.0
 pandas~=2.3.1
 scikit-learn~=1.6.1
-numpy
+numpy~=2.3.1
 xgboost
-imblearn
+imblearn~=0.0
 google-cloud-storage
 kfp
 google-cloud-aiplatform
@@ -12,7 +12,9 @@ protobuf~=6.31.1
 
 functions-framework==3.*
 
-joblib
+joblib~=1.5.1
 google-cloud-logging
 google-cloud-firestore
 streamlit_autorefresh
+imbalanced-learn~=0.13.0
+Flask

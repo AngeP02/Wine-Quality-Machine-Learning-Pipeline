@@ -1,4 +1,7 @@
 google-cloud-storage
+google-cloud-firestore
 pandas
+numpy
 scikit-learn
+imbalanced-learn
 joblib

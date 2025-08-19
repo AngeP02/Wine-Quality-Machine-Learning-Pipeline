@@ -39,25 +39,48 @@ if file_caricati:
     passo = 1
     db = firestore.Client()
 
-
-    def on_snapshot(doc_snapshot, changes, read_time):
+    def on_snapshot_preprocessing(doc_snapshot, changes, read_time):
         if not doc_snapshot:
             return
         data = doc_snapshot[0].to_dict() or {}
         stato = data.get("stato")
-        print(f"{passo}) {stato}")
+        print(f"Preprocessing) {stato}")
 
 
+    def on_snapshot_training(doc_snapshot, changes, read_time):
+        if not doc_snapshot:
+            return
+        data = doc_snapshot[0].to_dict() or {}
+        stato = data.get("stato", "Sconosciuto")
+        fase = data.get("fase", "N/A")
+        classi_rare = data.get("classi_rare", "N/A")
+        distribuzione = data.get("distribuzione_classi", {})
+        print(f"Training) Fase: {fase} | Stato: {stato} | Classi rare: {classi_rare}")
+        if distribuzione:
+            print("Distribuzione classi:")
+            for classe, count in distribuzione.items():
+                print(f"  Classe {classe}: {count}")
 
-    def start_firestore_listener():
+
+    def start_firestore_listener_preprocessing():
         doc_ref = db.collection("pipeline_status").document("preprocessing_latest")
-        doc_ref.on_snapshot(on_snapshot)
+        doc_ref.on_snapshot(on_snapshot_preprocessing)
+
+
+    def start_firestore_listener_training():
+        doc_ref = db.collection("pipeline_status").document("training_latest")
+        doc_ref.on_snapshot(on_snapshot_training)
 
 
     if "listener_started" not in st.session_state:
         st.session_state.listener_started = True
-        thread = threading.Thread(target=start_firestore_listener, daemon=True)
-        thread.start()
+
+        thread_1 = threading.Thread(target=start_firestore_listener_preprocessing, daemon=True)
+        thread_1.start()
+
+        thread_2 = threading.Thread(target=start_firestore_listener_training, daemon=True)
+        thread_2.start()
+
         time.sleep(0.1)
 
 

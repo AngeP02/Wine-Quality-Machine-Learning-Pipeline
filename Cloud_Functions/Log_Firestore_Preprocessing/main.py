@@ -1,4 +1,3 @@
-# main.py (Cloud Function status_to_firestore)
 import json
 from google.cloud import storage, firestore
 
