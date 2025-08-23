@@ -16,17 +16,37 @@ STATUS_BUCKET = os.getenv("STATUS_BUCKET", "wine-dataset-status")
 STATUS_FILE = os.getenv("STATUS_FILE", "status_training.json")
 
 
-def _scrivi_stato(storage_client, stato, extra=None):
+def _scrivi_stato(storage_client, stato, extra=None, reset=False):
     bucket = storage_client.bucket(STATUS_BUCKET)
     blob = bucket.blob(STATUS_FILE)
-    contenuto = {
+
+    if reset or not blob.exists():
+        contenuto = {
+            "fase": "training",
+            "cronologia": []
+        }
+    else:
+        contenuto = json.loads(blob.download_as_text())
+
+    contenuto.setdefault("cronologia", [])
+
+    nuovo_step = {
         "stato": stato,
-        "fase": "training",
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z"
     }
     if extra:
-        contenuto.update(extra)
-    blob.upload_from_string(json.dumps(contenuto), content_type="application/json")
+        nuovo_step.update(extra)
+
+    contenuto["cronologia"].append(nuovo_step)
+    contenuto["ultimo_stato"] = nuovo_step
+
+    blob.upload_from_string(
+        json.dumps(contenuto, indent=2),
+        content_type="application/json"
+    )
+
+
+
 
 
 def valuta_sbilanciamento(y):
@@ -35,11 +55,8 @@ def valuta_sbilanciamento(y):
     class_ratios = {k: v / total for k, v in counter.items()}
     rare_classes = sum(1 for ratio in class_ratios.values() if ratio < 0.05)
     min_ratio = min(class_ratios.values())
-    logging.info(f"Distribuzione classi: {dict(counter)}")
-    logging.info(f"Classi rare (< 5%): {rare_classes}")
-    logging.info(f"Classe più rara: {min_ratio:.3f}")
     return {
-        'class_counts': counter,
+        'class_counts': dict(counter),
         'class_ratios': class_ratios,
         'rare_classes': rare_classes,
         'min_ratio': min_ratio,
@@ -67,20 +84,21 @@ def training(event, context):
     file_name = event['name']
     bucket_name = event['bucket']
     try:
-        _scrivi_stato(storage_client, "Addestramento avviato", {
-            "file_sorgente_processato": file_name
-        })
+        _scrivi_stato(storage_client, "Addestramento avviato", {"file_sorgente": file_name}, reset=True)
         src_blob = storage_client.bucket(bucket_name).blob(file_name)
         df = pd.read_csv(io.BytesIO(src_blob.download_as_bytes()))
         if "quality" not in df.columns:
             raise ValueError("Manca la colonna 'quality' nel dataset preprocessato.")
+
         X = df.drop("quality", axis=1)
         y = df["quality"]
+
         imbalance_info = valuta_sbilanciamento(y)
         _scrivi_stato(storage_client, "Analisi distribuzione completata", {
             "distribuzione_classi": imbalance_info['class_counts'],
             "classi_rare": imbalance_info['rare_classes']
         })
+
         numeric_cols = X.select_dtypes(include=["number"]).columns.tolist()
         categorical_cols = X.select_dtypes(exclude=["number"]).columns.tolist()
         preprocessor = ColumnTransformer(
@@ -89,6 +107,7 @@ def training(event, context):
                 ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_cols)
             ]
         )
+
         try:
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=0.2, random_state=42, stratify=y
@@ -152,13 +171,13 @@ def training(event, context):
         metrics_blob = storage_client.bucket(MODEL_BUCKET).blob(f"{base}_detailed_metrics.json")
         metrics_blob.upload_from_string(json.dumps(sanitize_for_json(detailed_metrics), indent=2),
                                         content_type="application/json")
-
         _scrivi_stato(storage_client, "Addestramento completato", {
             "file_processato": file_name,
             "modello": model_filename,
-            "miglior_modello": "balanced_rf",
             "balanced_accuracy": balanced_acc,
-            "metriche": detailed_metrics
+            "f1_macro": f1_macro,
+            "f1_weighted": f1_weighted,
+            "confusion_matrix": cm
         })
 
         if os.path.exists(local_model_path):
@@ -168,6 +187,6 @@ def training(event, context):
         logging.exception("Errore durante l'addestramento")
         _scrivi_stato(storage_client, "Errore nell'addestramento", {
             "message": str(e),
-            "file_sorgente_processato": file_name
+            "file_sorgente": file_name
         })
         raise
