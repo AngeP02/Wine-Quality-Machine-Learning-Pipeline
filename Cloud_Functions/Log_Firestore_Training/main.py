@@ -1,3 +1,5 @@
+#Log Firestore Training
+
 import json
 from google.cloud import storage, firestore
 

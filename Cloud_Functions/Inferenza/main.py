@@ -1,6 +1,6 @@
+#Main inferenza
+
 import os
-import io
-import json
 import pandas as pd
 import joblib
 from google.cloud import storage

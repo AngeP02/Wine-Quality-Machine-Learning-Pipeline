@@ -1,4 +1,5 @@
-# main.py (Cloud Function preprocessing)
+#Preprocessing
+
 import os, io, json, logging, datetime
 from google.cloud import storage
 import pandas as pd

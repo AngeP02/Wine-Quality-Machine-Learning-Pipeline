@@ -1,12 +1,14 @@
+#Main principale
+
 import io
 import pandas as pd
 import streamlit as st
-from Funzioni.Caricamento_controllo_file import carica_file_su_gcs, genera_nome_univoco
+from Utils import carica_file_su_gcs, genera_nome_univoco
 from google.cloud import firestore
-import time
-import sys
 import matplotlib.pyplot as plt
 import seaborn as sns
+from google.cloud import storage
+import joblib
 
 st.set_page_config(page_title="Wine Quality ML Pipeline", layout="wide")
 st.subheader("Wine Quality - ML Pipeline Automatica")
@@ -109,7 +111,6 @@ if file_caricati:
                     st.session_state.id_run_corrente = None
 
 if st.session_state.log_visibile:
-    # Usa le colonne per allineare titolo e pulsante
     col_titolo, col_bottone = st.columns([4, 1])
     with col_titolo:
         st.markdown("#### Stato avanzamento pipeline")
@@ -167,14 +168,12 @@ if st.session_state.log_visibile:
                     log_lines.append("Nessuna informazione di training disponibile. In attesa...")
                 st.session_state.log_content = "\n".join(log_lines)
 
-    # Crea due colonne per affiancare il log e il grafico
     col_log, col_grafico = st.columns([3, 2])
 
     with col_log:
         st.code(st.session_state.log_content, language="text")
 
     with col_grafico:
-        # Il grafico viene disegnato solo se i dati della matrice sono disponibili nella session_state
         if st.session_state.confusion_matrix_data:
             st.code("Matrice di Confusione")
             cm_data = [row_dict["values"] for row_dict in st.session_state.confusion_matrix_data]
@@ -192,3 +191,52 @@ if st.session_state.log_visibile:
             ax.set_ylabel("Classe Reale", fontsize=6)
             st.pyplot(fig)
             plt.close(fig)
+
+if st.session_state.confusion_matrix_data:  # training completato
+    st.markdown("---")
+    st.markdown("#### Inferenza sul Modello Addestrato")
+
+    BUCKET_MODELLI = "wine-dataset-modello"
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(BUCKET_MODELLI)
+
+    blobs = list(bucket.list_blobs())
+    modelli = [b for b in blobs if b.name.endswith(".joblib")]
+
+    if not modelli:
+        st.warning("Nessun modello trovato nel bucket.")
+    else:
+        modelli.sort(key=lambda b: b.time_created, reverse=True)
+        ultimo_modello_blob = modelli[0]
+
+        st.info(f"Modello caricato: **{ultimo_modello_blob.name}**")
+
+        modello_bytes = ultimo_modello_blob.download_as_bytes()
+        modello_salvato = joblib.load(io.BytesIO(modello_bytes))
+
+        modello = modello_salvato["model"]
+        features = modello_salvato["feature_cols"]
+        if features:
+            st.write("Inserire i valori delle feature")
+
+            valori_input = {}
+            tipo_vino_selezionato = "red"
+
+            with st.form("inference_form"):
+                for feat in features:
+                    if feat == "tipo_vino":
+                        tipo_vino_selezionato = st.selectbox("Tipo Vino", ["red", "white", "Other"])
+                    else:
+                        valori_input[feat] = st.number_input(
+                            f"{feat}", value=0.0, step=0.1, format="%.5f"
+                        )
+                submitted = st.form_submit_button("Predizione")
+
+            if submitted:
+                X = pd.DataFrame([valori_input], columns=[f for f in features if f != "tipo_vino"])
+
+                if "tipo_vino" in features:
+                    X["tipo_vino"] = tipo_vino_selezionato
+
+                pred = modello.predict(X)[0]
+                st.success(f"Qualità Predetta: **{pred}**")

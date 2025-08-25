@@ -1,3 +1,5 @@
+#Log Firestore Preprocessing
+
 import json
 from google.cloud import storage, firestore
 
