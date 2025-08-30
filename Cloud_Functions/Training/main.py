@@ -15,12 +15,12 @@ from collections import Counter
 
 MODEL_BUCKET = os.getenv("MODEL_BUCKET", "wine-dataset-modello")
 STATUS_BUCKET = os.getenv("STATUS_BUCKET", "wine-dataset-status")
-STATUS_FILE = os.getenv("STATUS_FILE", "status_training.json")
 
 
-def _scrivi_stato(storage_client, stato, extra=None, reset=False):
+def _scrivi_stato(storage_client, job_id, stato, extra=None, reset=False):
     bucket = storage_client.bucket(STATUS_BUCKET)
-    blob = bucket.blob(STATUS_FILE)
+    status_file = f"status_training_{job_id}.json"
+    blob = bucket.blob(status_file)
 
     if reset or not blob.exists():
         contenuto = {
@@ -41,6 +41,8 @@ def _scrivi_stato(storage_client, stato, extra=None, reset=False):
 
     contenuto["cronologia"].append(nuovo_step)
     contenuto["ultimo_stato"] = nuovo_step
+    contenuto["job_id"] = job_id
+
 
     blob.upload_from_string(
         json.dumps(contenuto, indent=2),
@@ -52,25 +54,25 @@ def _scrivi_stato(storage_client, stato, extra=None, reset=False):
 
 
 def valuta_sbilanciamento(y):
-    counter = Counter(y)
-    total = len(y)
-    class_ratios = {k: v / total for k, v in counter.items()}
-    rare_classes = sum(1 for ratio in class_ratios.values() if ratio < 0.05)
-    min_ratio = min(class_ratios.values())
+    conteggio = Counter(y)
+    totale = len(y)
+    rapporti_classe = {k: v / totale for k, v in conteggio.items()}
+    classi_rare = sum(1 for ratio in rapporti_classe.values() if ratio < 0.05)
+    rapporto_minimo = min(rapporti_classe.values())
     return {
-        'class_counts': dict(counter),
-        'class_ratios': class_ratios,
-        'rare_classes': rare_classes,
-        'min_ratio': min_ratio,
-        'is_severely_imbalanced': rare_classes > 0 and min_ratio < 0.02
+        'class_counts': dict(conteggio),
+        'rapporti_classe': rapporti_classe,
+        'classi_rare': classi_rare,
+        'rapporto_minimo': rapporto_minimo,
+        'is_severely_imbalanced': classi_rare > 0 and rapporto_minimo < 0.02
     }
 
 
-def sanitize_for_json(obj):
+def pulizia_json(obj):
     if isinstance(obj, dict):
-        return {k: sanitize_for_json(v) for k, v in obj.items()}
+        return {k: pulizia_json(v) for k, v in obj.items()}
     elif isinstance(obj, list):
-        return [sanitize_for_json(v) for v in obj]
+        return [pulizia_json(v) for v in obj]
     elif isinstance(obj, Counter):
         return dict(obj)
     elif isinstance(obj, (np.integer, np.int64)):
@@ -82,31 +84,37 @@ def sanitize_for_json(obj):
 
 
 def training(event, context):
-    storage_client = storage.Client()
-    file_name = event['name']
-    bucket_name = event['bucket']
+    client_storage = storage.Client()
+    nome_file = event['name']
+    nome_bucket = event['bucket']
+
+    parti_nomi = nome_file.split("_")
+    if len(parti_nomi) >= 3:
+        job_id = parti_nomi[2]
+    else:
+        job_id = "unknown"
     try:
-        _scrivi_stato(storage_client, "Addestramento avviato", {"file_sorgente": file_name}, reset=True)
-        src_blob = storage_client.bucket(bucket_name).blob(file_name)
-        df = pd.read_csv(io.BytesIO(src_blob.download_as_bytes()))
+        _scrivi_stato(client_storage, job_id,"Addestramento avviato", {"file_sorgente": nome_file}, reset=True)
+        blob_sorgente = client_storage.bucket(nome_bucket).blob(nome_file)
+        df = pd.read_csv(io.BytesIO(blob_sorgente.download_as_bytes()))
         if "quality" not in df.columns:
             raise ValueError("Manca la colonna 'quality' nel dataset preprocessato.")
 
         X = df.drop("quality", axis=1)
         y = df["quality"]
 
-        imbalance_info = valuta_sbilanciamento(y)
-        _scrivi_stato(storage_client, "Analisi distribuzione completata", {
-            "distribuzione_classi": imbalance_info['class_counts'],
-            "classi_rare": imbalance_info['rare_classes']
+        info_sbilanciamento = valuta_sbilanciamento(y)
+        _scrivi_stato(client_storage, job_id,"Analisi distribuzione completata", {
+            "distribuzione_classi": info_sbilanciamento['class_counts'],
+            "classi_rare": info_sbilanciamento['classi_rare'],
         })
 
-        numeric_cols = X.select_dtypes(include=["number"]).columns.tolist()
-        categorical_cols = X.select_dtypes(exclude=["number"]).columns.tolist()
-        preprocessor = ColumnTransformer(
+        colonne_numeriche = X.select_dtypes(include=["number"]).columns.tolist()
+        colonne_categoriche = X.select_dtypes(exclude=["number"]).columns.tolist()
+        pre_processore = ColumnTransformer(
             transformers=[
-                ("num", StandardScaler(), numeric_cols),
-                ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_cols)
+                ("num", StandardScaler(), colonne_numeriche),
+                ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), colonne_categoriche)
             ]
         )
 
@@ -120,7 +128,7 @@ def training(event, context):
                 X, y, test_size=0.2, random_state=42
             )
 
-        model = BalancedRandomForestClassifier(
+        modello = BalancedRandomForestClassifier(
             n_estimators=300,
             random_state=42,
             n_jobs=-1,
@@ -129,66 +137,66 @@ def training(event, context):
             min_samples_leaf=2
         )
 
-        final_pipeline = ImbPipeline([
-            ('preprocessor', preprocessor),
-            ('classifier', model)
+        pipeline_finale = ImbPipeline([
+            ('pre_processore', pre_processore),
+            ('classifier', modello)
         ])
-        final_pipeline.fit(X_train, y_train)
+        pipeline_finale.fit(X_train, y_train)
 
-        y_pred = final_pipeline.predict(X_test)
+        y_pred = pipeline_finale.predict(X_test)
         balanced_acc = balanced_accuracy_score(y_test, y_pred)
         f1_macro = f1_score(y_test, y_pred, average='macro')
         f1_weighted = f1_score(y_test, y_pred, average='weighted')
         report = classification_report(y_test, y_pred, output_dict=True)
         cm = confusion_matrix(y_test, y_pred).tolist()
 
-        base = file_name.rsplit(".", 1)[0]
-        model_filename = f"{base}_balanced_rf_classifier.joblib"
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        local_model_path = os.path.join(script_dir, model_filename)
+        base = nome_file.rsplit(".", 1)[0]
+        nome_modello = f"{base}_{job_id}_balanced_rf_classifier.joblib"
+        directory_script = os.path.dirname(os.path.abspath(__file__))
+        percorso_locale_modello = os.path.join(directory_script, nome_modello)
         joblib.dump({
-            "model": final_pipeline,
+            "modello": pipeline_finale,
             "feature_cols": X.columns.tolist(),
             "model_type": "balanced_rf",
-            "class_distribution": imbalance_info['class_counts'],
+            "class_distribution": info_sbilanciamento['class_counts'],
             "preprocessing_info": {
-                "numeric_cols": numeric_cols,
-                "categorical_cols": categorical_cols
+                "colonne_numeriche": colonne_numeriche,
+                "colonne_categoriche": colonne_categoriche
             }
-        }, local_model_path)
-        storage_client.bucket(MODEL_BUCKET).blob(model_filename).upload_from_filename(
-            local_model_path, content_type="application/octet-stream"
+        }, percorso_locale_modello)
+        client_storage.bucket(MODEL_BUCKET).blob(nome_modello).upload_from_filename(
+            percorso_locale_modello, content_type="application/octet-stream"
         )
 
-        detailed_metrics = {
+        metriche_dettagliate = {
             "best_model": "balanced_rf",
             "balanced_accuracy": balanced_acc,
             "f1_macro": f1_macro,
             "f1_weighted": f1_weighted,
             "classification_report": report,
             "confusion_matrix": cm,
-            "class_distribution": imbalance_info['class_counts'],
-            "imbalance_analysis": imbalance_info
+            "class_distribution": info_sbilanciamento['class_counts'],
+            "imbalance_analysis": info_sbilanciamento
         }
-        metrics_blob = storage_client.bucket(MODEL_BUCKET).blob(f"{base}_detailed_metrics.json")
-        metrics_blob.upload_from_string(json.dumps(sanitize_for_json(detailed_metrics), indent=2),
+        blob_metriche = client_storage.bucket(MODEL_BUCKET).blob(f"{base}_detailed_metrics.json")
+        blob_metriche.upload_from_string(json.dumps(pulizia_json(metriche_dettagliate), indent=2),
                                         content_type="application/json")
-        _scrivi_stato(storage_client, "Addestramento completato", {
-            "file_processato": file_name,
-            "modello": model_filename,
+        _scrivi_stato(client_storage,job_id, "Addestramento completato", {
+            "file_processato": nome_file,
+            "modello": nome_modello,
             "balanced_accuracy": balanced_acc,
             "f1_macro": f1_macro,
             "f1_weighted": f1_weighted,
             "confusion_matrix": cm
         })
 
-        if os.path.exists(local_model_path):
-            os.remove(local_model_path)
+        if os.path.exists(percorso_locale_modello):
+            os.remove(percorso_locale_modello)
 
     except Exception as e:
         logging.exception("Errore durante l'addestramento")
-        _scrivi_stato(storage_client, "Errore nell'addestramento", {
+        _scrivi_stato(client_storage, job_id,"Errore nell'addestramento", {
             "message": str(e),
-            "file_sorgente": file_name
+            "file_sorgente": nome_file
         })
         raise

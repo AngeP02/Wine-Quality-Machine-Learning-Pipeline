@@ -1,12 +1,11 @@
 import os
-from main import training  # il file che hai incollato lo salvi come main_training.py
+from main import training
 
 
 def test_training():
-    # Evento simulato
     event = {
         "bucket": "wine-dataset-preprocessati",
-        "name": "wine-dataset_unito_20250819T152345_f9d355_processesato.csv"
+        "name":"wine-dataset_unito_60963e3cf51f4efba2844806da68e46b_20250830T220637_processesato.csv"
     }
     context = None
 

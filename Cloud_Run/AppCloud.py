@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from google.cloud import storage
 import joblib
+import uuid
 
 st.set_page_config(page_title="Wine Quality ML Pipeline", layout="wide")
 st.subheader("Wine Quality - ML Pipeline Automatica")
@@ -97,8 +98,9 @@ if lista_file_caricati:
                 df_unito["tipo_vino"] = colonna_tipo_vino
                 csv_buffer = io.StringIO()
                 df_unito.to_csv(csv_buffer, index=False, sep=",")
-                nome_file_unito = genera_nome_univoco("wine-dataset_unito.csv")
-                st.session_state.id_run_corrente = nome_file_unito
+                job_id = uuid.uuid4().hex
+                st.session_state.id_run_corrente = job_id
+                nome_file_unito = genera_nome_univoco(f"wine-dataset_unito_{job_id}.csv")
                 esito = carica_file_su_gcs("wine-dataset-originali", io.BytesIO(csv_buffer.getvalue().encode()), nome_file_unito)
                 if esito:
                     st.success(f"File caricato correttamente come {nome_file_unito}. La pipeline è stata avviata.")
@@ -122,25 +124,34 @@ if st.session_state.log_visibile:
             else:
                 db = firestore.Client()
                 riga_del_log = [f"Log per l'esecuzione di {id_run_atteso}\n", "FASE DI PREPROCESSING\n"]
-                documento_recente_stato_preprocessing = db.collection("pipeline_status").document("preprocessing_latest")
+                doc_id_preproc = f"preprocessing_{id_run_atteso}"
+                documento_recente_stato_preprocessing = db.collection("pipeline_status").document(doc_id_preproc)
                 documento_recuperato = documento_recente_stato_preprocessing.get()
                 nome_file_processato = None
                 if documento_recuperato.exists:
                     dati_documento_recuperato = documento_recuperato.to_dict()
-                    if dati_documento_recuperato.get("file_sorgente") == id_run_atteso:
-                        valore_stato_preprocessing = dati_documento_recuperato.get("stato", "Stato non disponibile")
-                        riga_del_log.append(f"Stato: {valore_stato_preprocessing}")
-                        if "file_processato" in dati_documento_recuperato:
-                            riga_del_log.append(f"File salvato come: {dati_documento_recuperato['file_processato']}")
-                        nome_file_processato = dati_documento_recuperato.get("file_processato")
+                    if dati_documento_recuperato.get("job_id") == id_run_atteso:
+                        cronologia_preproc = dati_documento_recuperato.get("cronologia", [])
+                        if cronologia_preproc:
+                            riga_del_log.append("Cronologia Preprocessing:")
+                            for step in cronologia_preproc:
+                                timestamp = step.get("timestamp", "N/A")
+                                stato_step = step.get("stato", "Sconosciuto")
+                                riga_del_log.append(f"- [{timestamp}] {stato_step}")
+                                if "file_processato" in step:
+                                    nome_file_processato = step["file_processato"]
+                                    riga_del_log.append(f"File salvato come: {nome_file_processato}")
+                        else:
+                            riga_del_log.append("Nessun dettaglio di preprocessing disponibile (cronologia vuota).")
                     else:
                         riga_del_log.append(f"In attesa che la pipeline processi il file {id_run_atteso}...")
                 else:
                     riga_del_log.append("Nessuna informazione di preprocessing disponibile. In attesa...")
 
-
                 riga_del_log.append("\nFASE DI ADDESTRAMENTO E VALUTAZIONE\n")
-                riferimento_file_addestramento_recente_firestore = db.collection("pipeline_status").document("training_latest")
+                id_run_atteso = st.session_state.id_run_corrente
+                doc_id_training = f"training_latest_{id_run_atteso}"
+                riferimento_file_addestramento_recente_firestore = db.collection("pipeline_status").document(doc_id_training)
                 documento_recuperato_training = riferimento_file_addestramento_recente_firestore.get()
                 st.session_state.dati_confusion_matrix = None
                 if documento_recuperato_training.exists and nome_file_processato:
@@ -209,7 +220,7 @@ if st.session_state.dati_confusion_matrix:
         st.info(f"Modello caricato: **{ultimo_modello.name}**")
         dati_binari_modello = ultimo_modello.download_as_bytes()
         modello_salvato = joblib.load(io.BytesIO(dati_binari_modello))
-        modello = modello_salvato["model"]
+        modello = modello_salvato["modello"]
         features = modello_salvato["feature_cols"]
         if features:
             st.write("Inserire i valori delle feature")

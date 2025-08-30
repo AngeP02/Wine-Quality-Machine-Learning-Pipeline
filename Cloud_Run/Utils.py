@@ -1,7 +1,6 @@
 from google.cloud import storage
 from google.api_core.exceptions import GoogleAPIError, Forbidden, NotFound
 import datetime
-import uuid
 
 def carica_file_su_gcs(bucket_name, file_obj, destination_blob_name):
     try:
@@ -21,8 +20,7 @@ def carica_file_su_gcs(bucket_name, file_obj, destination_blob_name):
 
 def genera_nome_univoco(nome_base):
     timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
-    id_unico = uuid.uuid4().hex[:6]
     estensione = nome_base.split(".")[-1]
     nome_senza_ext = ".".join(nome_base.split(".")[:-1])
-    nuovo_nome = f"{nome_senza_ext}_{timestamp}_{id_unico}.{estensione}"
+    nuovo_nome = f"{nome_senza_ext}_{timestamp}.{estensione}"
     return nuovo_nome

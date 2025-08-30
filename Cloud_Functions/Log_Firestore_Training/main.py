@@ -3,43 +3,30 @@
 import json
 from google.cloud import storage, firestore
 
-STATUS_FILE = "status_training.json"
-
 storage_client = storage.Client()
 db = firestore.Client()
 
 def status_to_firestore_training(event, context):
-    bucket_name = event["bucket"]
-    file_name = event["name"]
-
-    if file_name != STATUS_FILE:
+    nome_bucket = event["bucket"]
+    nome_file = event["name"]
+    if not nome_file.startswith("status_training_"):
         return
-
-    # scarico lo status file dal bucket
-    blob = storage_client.bucket(bucket_name).blob(file_name)
-    data = json.loads(blob.download_as_text())
-
-    # estraggo solo la cronologia
-    cronologia = data.get("cronologia", [])
-
-    # fix per confusion_matrix (Firestore non accetta liste di liste)
+    job_id = nome_file.replace("status_training_", "").replace(".json", "")
+    blob = storage_client.bucket(nome_bucket).blob(nome_file)
+    dati = json.loads(blob.download_as_text())
+    cronologia = dati.get("cronologia", [])
     for step in cronologia:
         if "confusion_matrix" in step:
             step["confusion_matrix"] = [
                 {"row": i, "values": row} for i, row in enumerate(step["confusion_matrix"])
             ]
-
-    # documento "corrente"
-    db.collection("pipeline_status").document("training_latest").set({
+    db.collection("pipeline_status").document(f"training_latest_{job_id}").set({
         "fase": "training",
+        "job_id": job_id,
         "cronologia": cronologia
     })
-
-    # storico
-    ultimo = cronologia[-1] if cronologia else {}
-    doc_id = ultimo.get("modello") or ultimo.get("timestamp") or "unknown"
-
-    db.collection("pipeline_status_history").document(f"training_{doc_id}").set({
+    db.collection("pipeline_status_history").document(f"training_{job_id}").set({
         "fase": "training",
+        "job_id": job_id,
         "cronologia": cronologia
     })
