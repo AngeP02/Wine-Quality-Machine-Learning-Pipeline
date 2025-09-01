@@ -15,3 +15,5 @@ streamlit_autorefresh
 seaborn
 scikit-learn==1.6.1
 imbalanced-learn==0.12.3
+Flask~=3.1.2
+requests~=2.32.5

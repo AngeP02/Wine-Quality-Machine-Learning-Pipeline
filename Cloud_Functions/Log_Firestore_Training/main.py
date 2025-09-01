@@ -15,6 +15,8 @@ def status_to_firestore_training(event, context):
     blob = storage_client.bucket(nome_bucket).blob(nome_file)
     dati = json.loads(blob.download_as_text())
     cronologia = dati.get("cronologia", [])
+    feature_cols = dati.get("ultimo_stato", {}).get("feature_cols", [])
+
     for step in cronologia:
         if "confusion_matrix" in step:
             step["confusion_matrix"] = [
@@ -23,10 +25,12 @@ def status_to_firestore_training(event, context):
     db.collection("pipeline_status").document(f"training_latest_{job_id}").set({
         "fase": "training",
         "job_id": job_id,
+        "feature_cols": feature_cols,
         "cronologia": cronologia
     })
     db.collection("pipeline_status_history").document(f"training_{job_id}").set({
         "fase": "training",
         "job_id": job_id,
+        "feature_cols": feature_cols,
         "cronologia": cronologia
     })

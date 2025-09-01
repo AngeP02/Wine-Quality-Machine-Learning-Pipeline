@@ -5,9 +5,8 @@ from Utils import carica_file_su_gcs, genera_nome_univoco
 from google.cloud import firestore
 import matplotlib.pyplot as plt
 import seaborn as sns
-from google.cloud import storage
-import joblib
 import uuid
+import requests
 
 st.set_page_config(page_title="Wine Quality ML Pipeline", layout="wide")
 st.subheader("Wine Quality - ML Pipeline Automatica")
@@ -204,39 +203,54 @@ if st.session_state.log_visibile:
             st.pyplot(fig)
             plt.close(fig)
 
+
 if st.session_state.dati_confusion_matrix:
     st.markdown("---")
-    st.markdown("#### Inferenza sul Modello Addestrato")
+    st.markdown("#### Inferenza sul Modello Addestrato tramite Cloud Function")
     BUCKET_MODELLI = "wine-dataset-modello"
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(BUCKET_MODELLI)
-    file_nel_bucket = list(bucket.list_blobs())
-    modelli = [b for b in file_nel_bucket if b.name.endswith(".joblib")]
-    if not modelli:
-        st.warning("Nessun modello trovato nel bucket.")
-    else:
-        modelli.sort(key=lambda b: b.time_created, reverse=True)
-        ultimo_modello = modelli[0]
-        st.info(f"Modello caricato: **{ultimo_modello.name}**")
-        dati_binari_modello = ultimo_modello.download_as_bytes()
-        modello_salvato = joblib.load(io.BytesIO(dati_binari_modello))
-        modello = modello_salvato["modello"]
-        features = modello_salvato["feature_cols"]
-        if features:
-            st.write("Inserire i valori delle feature")
-            valori_input = {}
-            tipo_vino_selezionato = "red"
-            with st.form("Inferenza"):
-                for feat in features:
-                    if feat == "tipo_vino":
-                        tipo_vino_selezionato = st.selectbox("Tipo Vino", ["red", "white", "other"])
-                    else:
-                        valori_input[feat] = st.number_input(f"{feat}", value=0.0, step=0.1, format="%.5f")
-                confermati = st.form_submit_button("Predizione")
+    db = firestore.Client()
 
-            if confermati:
-                X = pd.DataFrame([valori_input], columns=[f for f in features if f != "tipo_vino"])
-                if "tipo_vino" in features:
-                    X["tipo_vino"] = tipo_vino_selezionato
-                predizione = modello.predict(X)[0]
-                st.success(f"Qualità Predetta: **{predizione}**")
+    id_run_atteso = st.session_state.id_run_corrente
+    doc_id_training = f"training_latest_{id_run_atteso}"
+    documento_recuperato_training = db.collection("pipeline_status").document(doc_id_training).get()
+    features = None
+
+    if documento_recuperato_training.exists:
+        dati_training = documento_recuperato_training.to_dict()
+        cronologia = dati_training.get("cronologia", [])
+        if cronologia and "feature_cols" in cronologia[-1]:
+            features = cronologia[-1]["feature_cols"]
+
+    if not features:
+        st.warning("Non è stato possibile recuperare le feature per l'inferenza.")
+    else:
+        st.write("Inserire i valori delle feature per la predizione")
+        valori_input = {}
+        tipo_vino_selezionato = "red"
+
+        with st.form("Inferenza"):
+            for feat in features:
+                if feat == "tipo_vino":
+                    tipo_vino_selezionato = st.selectbox("Tipo Vino", ["red", "white", "other"])
+                else:
+                    valori_input[feat] = st.number_input(f"{feat}", value=0.0, step=0.1, format="%.5f")
+            confermati = st.form_submit_button("Predizione")
+
+        if confermati:
+            payload = valori_input.copy()
+            if "tipo_vino" in features:
+                payload["tipo_vino"] = tipo_vino_selezionato
+            dati_da_inviare = {
+                "job_id": st.session_state.id_run_corrente,
+                "features": payload
+            }
+            url_cloud_function = "https://us-central1-pipeline-ml-wine-dataset.cloudfunctions.net/inferenza"
+            try:
+                response = requests.post(url_cloud_function, json=dati_da_inviare)
+                if response.status_code == 200:
+                    predizione = response.json().get("qualita_predetta")
+                    st.success(f"Qualità Predetta: **{predizione}**")
+                else:
+                    st.error(f"Errore nella Cloud Function: {response.text}")
+            except Exception as e:
+                st.error(f"Chiamata alla Cloud Function fallita: {e}")

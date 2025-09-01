@@ -187,7 +187,8 @@ def training(event, context):
             "balanced_accuracy": balanced_acc,
             "f1_macro": f1_macro,
             "f1_weighted": f1_weighted,
-            "confusion_matrix": cm
+            "confusion_matrix": cm,
+            "feature_cols": X.columns.tolist()
         })
 
         if os.path.exists(percorso_locale_modello):
