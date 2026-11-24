@@ -1,67 +1,193 @@
 # Wine Quality ML Pipeline
 
-Pipeline automatizzata per l'addestramento e l'inferenza di modelli di Machine Learning sul **Wine Quality Dataset**, costruita su architettura serverless con Google Cloud Platform.
+An automated, serverless Machine Learning pipeline for wine quality classification, built on Google Cloud Platform.
 
-Progetto universitario per il corso di **Sistemi Distribuiti e Cloud Computing**.
+This project was developed as part of the *Distributed Systems and Cloud Computing* course. It demonstrates how to design and deploy an event-driven ML workflow that automates data preprocessing, model training, experiment tracking, and inference.
 
-## Cos'è questo progetto
+## Overview
 
-L'utente carica un dataset CSV di vini tramite un'interfaccia web, e da lì in poi tutto avviene in automatico. Il sistema fa preprocessing, addestra un modello di classificazione e lo rende disponibile per predire la qualità di nuovi vini, il tutto senza che l'utente debba toccare nulla nel mezzo.
+Wine Quality ML Pipeline provides an automated workflow for training and deploying Machine Learning models using the Wine Quality dataset.
 
-L'architettura è interamente serverless, non si ha nessun server sempre acceso, tutto si attiva on-demand tramite eventi su Google Cloud Storage.
+Users can upload CSV files through a Streamlit web interface. Once a dataset is uploaded, the system automatically triggers the subsequent stages of the pipeline:
 
-## Architettura
+1. Data preprocessing and cleaning.
+2. Model training and evaluation.
+3. Storage of the trained model and evaluation metrics.
+4. Logging and monitoring through Google Cloud Firestore.
+5. Model inference through an HTTP endpoint.
 
+The architecture relies on Google Cloud services and event-driven execution, avoiding the need to manage permanently running infrastructure for the individual processing tasks.
+
+## Architecture
+
+The system follows a serverless, event-driven architecture in which Google Cloud Storage acts as the communication layer between pipeline stages.
+
+```text
+                 User
+                   |
+                   v
+          Streamlit Web Interface
+               (Cloud Run)
+                   |
+                   v
+             Google Cloud
+                Storage
+                   |
+          +--------+--------+
+          |                 |
+          v                 v
+    Preprocessing         Dataset
+    Cloud Function       Upload
+          |
+          v
+  Preprocessed Dataset
+          |
+          v
+    Training Cloud
+       Function
+          |
+          +--------------------+
+          |                    |
+          v                    v
+    Trained Model         Training Metrics
+          |                    |
+          +---------+----------+
+                    |
+                    v
+             Cloud Storage
+                    |
+                    v
+              HTTP Inference
+                 Function
+                    |
+                    v
+             Streamlit Interface
+
+        Processing and training logs
+                    |
+                    v
+                 Firestore
 ```
-GUI Streamlit (Cloud Run)
-        │
-        ▼
-Google Cloud Storage  ──trigger──▶  Cloud Function: Pre-processing
-        │                                    │
-        │                           Cloud Function: Logging Pre-processing
-        │                                    │
-        │                                    ▼
-        │                              Firestore
-        │
-        └──trigger──▶  Cloud Function: Training
-                                │
-                       Cloud Function: Logging Training
-                                │
-                                ▼
-                           Firestore
-                                │
-                       Cloud Function HTTP: Inferenza  ◀──  GUI
-```
 
-Il flusso è completamente event-driven, infatti, ogni fase si attiva quando la precedente deposita il proprio output su GCS, senza chiamate dirette tra componenti.
+Each processing stage is triggered by the creation of the corresponding files in Cloud Storage. Separate logging functions transfer execution status information to Firestore, allowing the application to retrieve and display the pipeline history.
 
-## Componenti principali
+## Main Components
 
-**GUI Streamlit (`Cloud_Run/`)**
-Interfaccia web deployata su Cloud Run. Permette di:
-- Caricare uno o più file CSV del dataset (con validazione automatica);
-- Monitorare lo stato della pipeline tramite un pulsante di aggiornamento log;
-- Visualizzare metriche, cronologia del training e matrice di confusione;
-- Eseguire inferenza inserendo manualmente i valori delle feature.
+### 1. Web Interface — Streamlit and Cloud Run
 
-**Cloud Functions (`Cloud_Functions/`)**
+The Streamlit application provides the user-facing interface and is deployed on Google Cloud Run.
 
-| Funzione | Trigger | Cosa fa |
-|---|---|---|
-| `preprocessing` | Nuovo file in `wine-dataset-originali` | Pulizia, imputazione valori mancanti, normalizzazione |
-| `log_firestore_preprocessing` | Nuovo status JSON in `wine-dataset-status` | Trasferisce lo stato del preprocessing su Firestore |
-| `training` | Nuovo file in `wine-dataset-preprocessati` | Addestra il modello e salva metriche + modello serializzato |
-| `log_firestore_training` | Nuovo status JSON in `wine-dataset-status` | Trasferisce la cronologia del training su Firestore |
-| `inferenza` | HTTP POST | Carica il modello e restituisce la predizione |
+It allows users to:
 
-**Dataset (`Dati/`)**
-Contiene i CSV del Wine Quality Dataset (vino bianco e rosso). Ogni riga rappresenta un campione di vino descritto da 11 feature chimico-fisiche più la variabile target `quality` (scala 3–8).
+- Upload one or more CSV files containing wine samples.
+- Check the status of preprocessing and training operations.
+- Retrieve pipeline execution logs.
+- Visualize model evaluation metrics and confusion matrices.
+- Inspect the training history.
+- Submit individual wine samples for quality prediction.
 
-**Modello ML**
+### 2. Data Preprocessing — Cloud Functions
 
-Viene usato un **Balanced Random Forest Classifier** dalla libreria `imbalanced-learn`, scelto per gestire lo sbilanciamento del dataset (le classi intermedie 5 e 6 sono molto più frequenti delle altre). Il modello è incluso in una pipeline scikit-learn che comprende anche preprocessing e OneHotEncoding della variabile categorica `tipo_vino`, così da essere completamente auto-contenuto al momento dell'inferenza.
+The preprocessing function is triggered when a new dataset is uploaded to the original dataset bucket.
 
-**Metriche calcolate:**
+The preprocessing stage includes:
+
+- Data cleaning.
+- Handling of missing values.
+- Feature normalization.
+- Preparation of the dataset for model training.
+
+The resulting dataset is stored in a dedicated Cloud Storage bucket, triggering the next stage of the pipeline.
+
+### 3. Model Training — Cloud Functions
+
+The training function is automatically activated when a preprocessed dataset becomes available.
+
+It trains a classification model, evaluates its performance, and stores the resulting artifacts, including the serialized model and evaluation metrics.
+
+The project uses a **Balanced Random Forest Classifier**, implemented through the `imbalanced-learn` library.
+
+This algorithm was selected to address the class imbalance in the Wine Quality dataset, where intermediate quality scores are considerably more frequent than the others.
+
+The training pipeline includes the preprocessing steps and categorical feature encoding, allowing the complete model pipeline to be reused during inference.
+
+### 4. Logging and Monitoring — Cloud Firestore
+
+Dedicated Cloud Functions collect execution status information generated during preprocessing and training.
+
+The information is transferred to Google Cloud Firestore, which acts as the persistence layer for pipeline logs and training history.
+
+The Streamlit interface retrieves this information to provide visibility into the execution of the different pipeline stages.
+
+### 5. Model Inference — HTTP Cloud Function
+
+Once a model has been trained, an HTTP-triggered Cloud Function makes it available for inference.
+
+The application sends the input features to the endpoint, which loads the trained model and returns the predicted wine quality.
+
+This separates model training from prediction, allowing the inference service to use the latest available trained model without requiring the training process to run again.
+
+## Dataset
+
+The project uses the **Wine Quality dataset**, containing physicochemical measurements of red and white wine samples.
+
+Each sample is described by 11 physicochemical features and a target variable representing wine quality.
+
+The target values range from 3 to 8.
+
+The input features include measurements such as:
+
+- Fixed acidity
+- Volatile acidity
+- Citric acid
+- Residual sugar
+- Chlorides
+- Free sulfur dioxide
+- Total sulfur dioxide
+- Density
+- pH
+- Sulphates
+- Alcohol
+
+The dataset also includes a categorical feature identifying the wine type.
+
+## Machine Learning Pipeline
+
+The classification workflow is based on a scikit-learn pipeline integrating data preprocessing and the classification model.
+
+The main steps are:
+
+1. Data preparation and cleaning.
+2. Feature preprocessing and normalization.
+3. Encoding of the categorical `tipo_vino` feature.
+4. Training of a Balanced Random Forest Classifier.
+5. Model evaluation.
+6. Serialization of the trained pipeline.
+
+### Evaluation Metrics
+
+Model performance is evaluated using:
+
 - Balanced Accuracy
-- F1 macro e F1 weighted
-- Classification report completo + matrice di confusione
+- Macro F1-score
+- Weighted F1-score
+- Classification Report
+- Confusion Matrix
+
+Using multiple evaluation metrics provides a more informative assessment than accuracy alone, particularly in the presence of imbalanced target classes.
+
+## Technology Stack
+
+| Category | Technologies |
+|---|---|
+| Programming Language | Python |
+| Machine Learning | scikit-learn, imbalanced-learn |
+| Data Processing | Pandas, NumPy |
+| Machine Learning Models | Balanced Random Forest |
+| Web Interface | Streamlit |
+| Cloud Platform | Google Cloud Platform |
+| Serverless Compute | Cloud Functions, Cloud Run |
+| Object Storage | Google Cloud Storage |
+| Database and Logging | Cloud Firestore |
+| Visualization | Matplotlib, Seaborn |
+
